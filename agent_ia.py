@@ -35,6 +35,19 @@ log_dir = os.path.join(os.path.dirname(__file__), "logs")
 for directory in [model_dir, dataset_dir, log_dir]:
     os.makedirs(directory, exist_ok=True)
 
+def load_model(model_path):
+    """Charge un modèle quel que soit son format (.pkl, .joblib, etc.)"""
+    if not os.path.exists(model_path):
+        return None
+    
+    try:
+        # Essayer joblib en premier (supporte plus de formats)
+        model = joblib.load(model_path)
+        return model
+    except Exception as e:
+        # Si joblib échoue, essayer d'autres méthodes si nécessaire
+        raise Exception(f"Impossible de charger le modèle {model_path}: {str(e)}")
+
 def log_action(action, details):
     """Enregistre les actions dans un fichier de log"""
     timestamp = datetime.now().isoformat()
@@ -53,14 +66,14 @@ def predict():
     """Endpoint de prédiction standard"""
     data = request.get_json(force=True)
     resultat = {
-        "panne_detectée": None,
+        "pannes_detectees": [],  # Liste de toutes les pannes détectées
+        "panne_principale": None,  # Panne avec le score le plus élevé
         "variable_dominante": None,
-        "score": None,
-        "diagnostic_complet": {},
-        "pannes_detectees": []  # Nouveau champ pour toutes les pannes détectées
+        "score_principal": None,
+        "diagnostic_complet": {}
     }
 
-    pannes_trouvees = []  # Liste temporaire pour stocker toutes les pannes détectées
+    pannes_detectees_temp = []
 
     for panne, variables in pannes.items():
         if not all(var in data for var in variables):
@@ -69,13 +82,27 @@ def predict():
 
         try:
             X = [[float(data[var]) for var in variables]]
-            model_path = os.path.join(model_dir, f"{panne}.pkl")
-
-            if not os.path.exists(model_path):
+            
+            # Chercher le modèle dans différents formats
+            model_paths = [
+                os.path.join(model_dir, f"{panne}.pkl"),
+                os.path.join(model_dir, f"{panne}.joblib"),
+                os.path.join(model_dir, f"model_{panne}.pkl"),
+                os.path.join(model_dir, f"model_{panne}.joblib")
+            ]
+            
+            model = None
+            model_path_used = None
+            for model_path in model_paths:
+                if os.path.exists(model_path):
+                    model = load_model(model_path)
+                    model_path_used = model_path
+                    break
+            
+            if model is None:
                 resultat["diagnostic_complet"][panne] = "modèle introuvable"
                 continue
 
-            model = joblib.load(model_path)
             prediction = model.predict(X)[0]
             resultat["diagnostic_complet"][panne] = int(prediction)
 
@@ -92,38 +119,32 @@ def predict():
                 if hasattr(model, "predict_proba"):
                     score = round(model.predict_proba(X)[0][1] * 100, 2)
                 else:
-                    score = "Non disponible"
+                    score = 100  # Valeur par défaut si predict_proba non disponible
 
-                # Stocker les informations de la panne détectée
                 panne_info = {
                     "panne": panne,
                     "variable_dominante": variable_dominante,
-                    "score": score
-                }
-                pannes_trouvees.append(panne_info)
-
-                log_action("prediction_detected", {
-                    "panne": panne,
                     "score": score,
-                    "variable_dominante": variable_dominante
-                })
-                # SUPPRIMER LE BREAK POUR CONTINUER À VÉRIFIER TOUTES LES PANNES
+                    "modele_utilise": os.path.basename(model_path_used)
+                }
+                
+                pannes_detectees_temp.append(panne_info)
+                log_action("prediction_detectee", panne_info)
 
         except Exception as e:
             resultat["diagnostic_complet"][panne] = f"erreur: {str(e)}"
             log_action("error", {"panne": panne, "error": str(e)})
 
-    # Après avoir parcouru toutes les pannes, déterminer la panne principale
-    if pannes_trouvees:
-        # Trier par score de confiance (le plus élevé en premier)
-        pannes_trouvees.sort(key=lambda x: x["score"] if isinstance(x["score"], (int, float)) else 0, reverse=True)
-        
-        # Prendre la panne avec le score le plus élevé comme panne principale
-        panne_principale = pannes_trouvees[0]
-        resultat["panne_detectée"] = panne_principale["panne"]
-        resultat["variable_dominante"] = panne_principale["variable_dominante"]
-        resultat["score"] = panne_principale["score"]
-        resultat["pannes_detectees"] = pannes_trouvees  # Toutes les pannes détectées
+    # Trier les pannes détectées par score (du plus élevé au plus bas)
+    pannes_detectees_temp.sort(key=lambda x: x["score"], reverse=True)
+    
+    # Mettre à jour le résultat final
+    resultat["pannes_detectees"] = pannes_detectees_temp
+    
+    if pannes_detectees_temp:
+        resultat["panne_principale"] = pannes_detectees_temp[0]["panne"]
+        resultat["variable_dominante"] = pannes_detectees_temp[0]["variable_dominante"]
+        resultat["score_principal"] = pannes_detectees_temp[0]["score"]
 
     return jsonify(resultat)
 
@@ -188,7 +209,7 @@ def retrain():
                 y_pred = model.predict(X_test)
                 accuracy = accuracy_score(y_test, y_pred)
                 
-                # Sauvegarder le modèle
+                # Sauvegarder le modèle en .pkl (format standard)
                 model_path = os.path.join(model_dir, f"{panne}.pkl")
                 joblib.dump(model, model_path)
                 
@@ -196,7 +217,8 @@ def retrain():
                     "status": "success",
                     "accuracy": round(accuracy * 100, 2),
                     "training_samples": len(X_train),
-                    "test_samples": len(X_test)
+                    "test_samples": len(X_test),
+                    "model_format": "pkl"
                 }
                 
             except Exception as e:
@@ -315,13 +337,15 @@ def train_new_fault():
 @app.route('/status', methods=['GET'])
 def status():
     """Retourne le statut de l'agent IA"""
-    models_count = len([f for f in os.listdir(model_dir) if f.endswith('.pkl')])
+    model_files = [f for f in os.listdir(model_dir) if f.endswith(('.pkl', '.joblib'))]
+    models_count = len(model_files)
     
     return jsonify({
         "status": "online",
         "models_loaded": models_count,
         "known_faults": len(pannes),
         "fault_types": list(pannes.keys()),
+        "model_files": model_files,
         "timestamp": datetime.now().isoformat()
     })
 
@@ -336,18 +360,25 @@ def metrics():
         }
         
         for panne in pannes.keys():
-            model_path = os.path.join(model_dir, f"{panne}.pkl")
-            if os.path.exists(model_path):
-                model_size = os.path.getsize(model_path)
-                metrics_data["models"][panne] = {
-                    "exists": True,
-                    "size_kb": round(model_size / 1024, 2),
-                    "last_modified": datetime.fromtimestamp(
-                        os.path.getmtime(model_path)
-                    ).isoformat()
-                }
-                metrics_data["total_models"] += 1
-            else:
+            # Chercher le modèle dans différents formats
+            model_found = False
+            for ext in ['.pkl', '.joblib']:
+                model_path = os.path.join(model_dir, f"{panne}{ext}")
+                if os.path.exists(model_path):
+                    model_size = os.path.getsize(model_path)
+                    metrics_data["models"][panne] = {
+                        "exists": True,
+                        "format": ext,
+                        "size_kb": round(model_size / 1024, 2),
+                        "last_modified": datetime.fromtimestamp(
+                            os.path.getmtime(model_path)
+                        ).isoformat()
+                    }
+                    metrics_data["total_models"] += 1
+                    model_found = True
+                    break
+            
+            if not model_found:
                 metrics_data["models"][panne] = {"exists": False}
         
         return jsonify(metrics_data)
