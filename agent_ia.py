@@ -33,7 +33,11 @@ log_dir = os.path.join(os.path.dirname(__file__), "logs")
 
 # Créer les dossiers s'ils n'existent pas
 for directory in [model_dir, dataset_dir, log_dir]:
-    os.makedirs(directory, exist_ok=True)
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except FileExistsError:
+        # Le dossier existe déjà, on continue
+        pass
 
 def load_model(model_path):
     """Charge un modèle quel que soit son format (.pkl, .joblib, etc.)"""
