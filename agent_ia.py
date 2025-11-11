@@ -608,4 +608,4 @@ if __name__ == '__main__':
     print(f"📁 Répertoire modèles: {model_dir}")
     print(f"🔍 Types de pannes connus: {len(pannes)}")
     
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=10000, debug=False)
