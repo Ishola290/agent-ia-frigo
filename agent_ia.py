@@ -11,6 +11,34 @@ from datetime import datetime
 
 app = Flask(__name__)
 
+# Fonction de diagnostic pour Render.com
+def diagnose_filesystem():
+    """Diagnostique les problèmes de filesystem"""
+    print("=" * 50)
+    print("🔍 DIAGNOSTIC FILESYSTEM")
+    print("=" * 50)
+    
+    app_dir = os.path.dirname(__file__)
+    print(f"📁 Répertoire de l'application: {app_dir}")
+    print(f"📁 Répertoire de travail: {os.getcwd()}")
+    print(f"🔐 UID/GID: {os.getuid()}/{os.getgid()}" if hasattr(os, 'getuid') else "🔐 Windows")
+    
+    # Vérifier /app
+    if os.path.exists('/app'):
+        print(f"📦 /app existe")
+        try:
+            items = os.listdir('/app')
+            print(f"   Contenu: {items[:10]}")  # Premiers 10 items
+            for item in ['models', 'datasets', 'logs']:
+                path = f'/app/{item}'
+                if os.path.exists(path):
+                    is_dir = os.path.isdir(path)
+                    print(f"   ⚠️  {item}: {'DOSSIER' if is_dir else 'FICHIER (PROBLÈME!)'}")
+        except Exception as e:
+            print(f"   ❌ Erreur lecture: {e}")
+    
+    print("=" * 50)
+
 # Dictionnaire des pannes et variables associées
 pannes = {
     "surchauffe_compresseur": ["Température", "Courant", "Vibration"],
@@ -32,9 +60,19 @@ model_dir = os.path.join(os.path.dirname(__file__), "models")
 dataset_dir = os.path.join(os.path.dirname(__file__), "datasets")
 log_dir = os.path.join(os.path.dirname(__file__), "logs")
 
-# Créer les dossiers s'ils n'existent pas
+# Créer les dossiers s'ils n'existent pas - avec gestion d'erreur robuste
 for directory in [model_dir, dataset_dir, log_dir]:
-    os.makedirs(directory, exist_ok=True)
+    try:
+        if not os.path.exists(directory):
+            os.makedirs(directory, mode=0o755)
+        elif not os.path.isdir(directory):
+            # Si c'est un fichier au lieu d'un dossier, le supprimer
+            os.remove(directory)
+            os.makedirs(directory, mode=0o755)
+    except (FileExistsError, PermissionError, OSError) as e:
+        # Si le dossier existe déjà ou erreur de permission, continuer
+        print(f"Note: Dossier {directory} - {str(e)}")
+        pass
 
 def load_model(model_path):
     """Charge un modèle quel que soit son format (.pkl, .joblib, etc.)"""
@@ -547,6 +585,9 @@ def health():
     })
 
 if __name__ == '__main__':
+    # Diagnostic au démarrage
+    diagnose_filesystem()
+    
     # Charger la configuration des pannes si elle existe
     config_path = os.path.join(model_dir, "pannes_config.json")
     if os.path.exists(config_path):
@@ -554,9 +595,9 @@ if __name__ == '__main__':
             with open(config_path, 'r', encoding='utf-8') as f:
                 loaded_pannes = json.load(f)
                 pannes.update(loaded_pannes)
-                print(f"Configuration chargée: {len(pannes)} types de pannes")
+                print(f"✅ Configuration chargée: {len(pannes)} types de pannes")
         except Exception as e:
-            print(f"Erreur lors du chargement de la configuration: {str(e)}")
+            print(f"⚠️  Erreur lors du chargement de la configuration: {str(e)}")
     
     log_action("agent_start", {
         "pannes_count": len(pannes),
