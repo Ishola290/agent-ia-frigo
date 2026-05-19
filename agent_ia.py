@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import joblib
 import pickle
 import os
@@ -10,7 +11,7 @@ from sklearn.metrics import accuracy_score, classification_report
 from datetime import datetime
 
 app = Flask(__name__)
-
+CORS(app)
 # Fonction de diagnostic pour Render.com
 def diagnose_filesystem():
     """Diagnostique les problèmes de filesystem"""
