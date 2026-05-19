@@ -267,6 +267,185 @@ def predict():
             "timestamp": datetime.now().isoformat()
         }), 500
 
+@app.route('/predict_advanced', methods=['POST'])
+def predict_advanced():
+    """
+    Pipeline complet avec :
+    1. Isolation Forest → Détection d'anomalies (nouvelles pannes)
+    2. 12 modèles individuels → Prédiction des pannes connues
+    3. Multi-label Random Forest → Validation des prédictions
+    """
+    try:
+        data = request.get_json(force=True)
+        
+        resultat = {
+            "is_anomaly": False,
+            "anomaly_score": 0.0,
+            "pannes_detectees": [],
+            "panne_detectee": None,
+            "variable_dominante": None,
+            "score": None,
+            "diagnostic_complet": {},
+            "multi_label_validation": {},
+            "avertissement": None,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        # ÉTAPE 1 : Isolation Forest - Détection d'anomalies
+        try:
+            isolation_model_path = os.path.join(model_dir, "isolation_forest_model.joblib")
+            if os.path.exists(isolation_model_path):
+                isolation_model = load_model(isolation_model_path)
+                
+                # Toutes les variables pour l'isolation forest
+                all_variables = ['Température', 'Pression_BP', 'Pression_HP', 'Courant',
+                                'Tension', 'Humidité', 'Débit_air', 'Vibration']
+                X = [[float(data.get(var, 0)) for var in all_variables]]
+                
+                # Prédiction : -1 = anomalie, 1 = normal
+                anomaly_pred = int(isolation_model.predict(X)[0])
+                anomaly_score = float(isolation_model.score_samples(X)[0])
+                
+                resultat["is_anomaly"] = (anomaly_pred == -1)
+                resultat["anomaly_score"] = round(anomaly_score, 4)
+                
+                log_action("isolation_forest_check", {
+                    "is_anomaly": resultat["is_anomaly"],
+                    "anomaly_score": resultat["anomaly_score"]
+                })
+        except Exception as e:
+            print(f"Erreur Isolation Forest: {str(e)}")
+            resultat["is_anomaly"] = False
+
+        # ÉTAPE 2 : 12 modèles individuels (code existant)
+        pannes_detectees_temp = []
+        for panne, variables in pannes.items():
+            variables_manquantes = [var for var in variables if var not in data]
+            if variables_manquantes:
+                resultat["diagnostic_complet"][panne] = 0
+                continue
+
+            try:
+                X = [[float(data[var]) for var in variables]]
+                
+                model_paths = [
+                    os.path.join(model_dir, f"model_{panne}.joblib"),
+                    os.path.join(model_dir, f"{panne}.joblib"),
+                ]
+                
+                model = None
+                for model_path in model_paths:
+                    if os.path.exists(model_path):
+                        model = load_model(model_path)
+                        break
+                
+                if model is None:
+                    resultat["diagnostic_complet"][panne] = 0
+                    continue
+
+                prediction = int(model.predict(X)[0])
+                resultat["diagnostic_complet"][panne] = prediction
+
+                if prediction == 1:
+                    importances = getattr(model, "feature_importances_", None)
+                    if importances is not None and len(importances) > 0:
+                        index_max = importances.argmax()
+                        variable_dominante = variables[index_max]
+                    else:
+                        variable_dominante = "Non disponible"
+
+                    if hasattr(model, "predict_proba"):
+                        try:
+                            proba = model.predict_proba(X)[0]
+                            if len(proba) > 1:
+                                score = round(proba[1] * 100, 2)
+                            else:
+                                score = 100.0
+                        except:
+                            score = 100.0
+                    else:
+                        score = 100.0
+
+                    panne_info = {
+                        "panne": panne,
+                        "variable_dominante": variable_dominante,
+                        "score": score,
+                        "variables_analysees": variables
+                    }
+                    pannes_detectees_temp.append(panne_info)
+
+            except Exception as e:
+                resultat["diagnostic_complet"][panne] = 0
+
+        # ÉTAPE 3 : Multi-label Random Forest - Validation
+        try:
+            multi_label_path = os.path.join(model_dir, "multi_label_random_forest_model.joblib")
+            if os.path.exists(multi_label_path) and pannes_detectees_temp:
+                multi_label_model = load_model(multi_label_path)
+                
+                all_variables = ['Température', 'Pression_BP', 'Pression_HP', 'Courant',
+                                'Tension', 'Humidité', 'Débit_air', 'Vibration']
+                X = [[float(data.get(var, 0)) for var in all_variables]]
+                
+                # Prédiction multi-label (retourne un tableau de 0/1 pour chaque panne)
+                multi_pred = multi_label_model.predict(X)[0]
+                
+                # Mapping des pannes aux indices (ordre alphabétique ou défini)
+                pannes_list = sorted(pannes.keys())
+                for i, panne in enumerate(pannes_list):
+                    if i < len(multi_pred):
+                        resultat["multi_label_validation"][panne] = int(multi_pred[i])
+                
+                # Filtrer les pannes validées par le multi-label
+                pannes_detectees_temp = [
+                    p for p in pannes_detectees_temp 
+                    if resultat["multi_label_validation"].get(p["panne"], 0) == 1
+                ]
+                
+                log_action("multi_label_validation", {
+                    "pannes_validees": len(pannes_detectees_temp),
+                    "validation": resultat["multi_label_validation"]
+                })
+        except Exception as e:
+            print(f"Erreur Multi-label: {str(e)}")
+            # En cas d'erreur, on garde toutes les pannes détectées
+
+        # Résultat final
+        pannes_detectees_temp.sort(key=lambda x: x["score"], reverse=True)
+        resultat["pannes_detectees"] = pannes_detectees_temp
+        
+        if pannes_detectees_temp:
+            resultat["panne_detectee"] = pannes_detectees_temp[0]["panne"]
+            resultat["variable_dominante"] = pannes_detectees_temp[0]["variable_dominante"]
+            resultat["score"] = pannes_detectees_temp[0]["score"]
+            
+            if len(pannes_detectees_temp) > 1:
+                resultat["avertissement"] = f"{len(pannes_detectees_temp)} pannes détectées simultanément."
+        else:
+            resultat["panne_detectee"] = None
+            resultat["variable_dominante"] = "Non disponible"
+            resultat["score"] = 0
+
+        # Si anomalie détectée mais aucune panne connue → nouvelle panne
+        if resultat["is_anomaly"] and not pannes_detectees_temp:
+            resultat["avertissement"] = "ANOMALIE DÉTECTÉE : Nouvelle panne potentielle non répertoriée !"
+
+        log_action("prediction_advanced_complete", {
+            "is_anomaly": resultat["is_anomaly"],
+            "nombre_pannes": len(pannes_detectees_temp),
+            "pannes": [p["panne"] for p in pannes_detectees_temp]
+        })
+
+        return jsonify(resultat)
+    
+    except Exception as e:
+        log_action("erreur_endpoint_predict_advanced", {"error": str(e)})
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
 @app.route('/retrain', methods=['POST'])
 def retrain():
     """Réentraîne tous les modèles avec le dataset mis à jour"""
