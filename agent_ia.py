@@ -274,7 +274,7 @@ def predict_advanced():
     Pipeline complet avec :
     1. Isolation Forest → Détection d'anomalies (nouvelles pannes)
     2. 12 modèles individuels → Prédiction des pannes connues
-    3. Multi-label Random Forest → Validation des prédictions
+    3. Multi-label Random Forest → Validation des prédictions (informatif)
     """
     try:
         data = request.get_json(force=True)
@@ -318,7 +318,7 @@ def predict_advanced():
             print(f"Erreur Isolation Forest: {str(e)}")
             resultat["is_anomaly"] = False
 
-        # ÉTAPE 2 : 12 modèles individuels (code existant)
+        # ÉTAPE 2 : 12 modèles individuels (Source de vérité principale)
         pannes_detectees_temp = []
         for panne, variables in pannes.items():
             variables_manquantes = [var for var in variables if var not in data]
@@ -378,10 +378,10 @@ def predict_advanced():
             except Exception as e:
                 resultat["diagnostic_complet"][panne] = 0
 
-        # ÉTAPE 3 : Multi-label Random Forest - Validation
+        # ÉTAPE 3 : Multi-label Random Forest - Validation (Informatif uniquement)
         try:
             multi_label_path = os.path.join(model_dir, "multi_label_random_forest_model.joblib")
-            if os.path.exists(multi_label_path) and pannes_detectees_temp:
+            if os.path.exists(multi_label_path):
                 multi_label_model = load_model(multi_label_path)
                 
                 all_variables = ['Température', 'Pression_BP', 'Pression_HP', 'Courant',
@@ -391,25 +391,22 @@ def predict_advanced():
                 # Prédiction multi-label (retourne un tableau de 0/1 pour chaque panne)
                 multi_pred = multi_label_model.predict(X)[0]
                 
-                # Mapping des pannes aux indices (ordre alphabétique ou défini)
+                # Mapping des pannes aux indices (ordre alphabétique)
                 pannes_list = sorted(pannes.keys())
                 for i, panne in enumerate(pannes_list):
                     if i < len(multi_pred):
                         resultat["multi_label_validation"][panne] = int(multi_pred[i])
                 
-                # Filtrer les pannes validées par le multi-label
-                pannes_detectees_temp = [
-                    p for p in pannes_detectees_temp 
-                    if resultat["multi_label_validation"].get(p["panne"], 0) == 1
-                ]
+                # CORRECTION : On ne filtre PLUS la liste pannes_detectees_temp.
+                # Le modèle multi-label peut avoir un ordre de classes différent lors de l'entraînement,
+                # ce qui effaçait toutes les détections. On garde les 12 modèles spécialisés.
                 
                 log_action("multi_label_validation", {
-                    "pannes_validees": len(pannes_detectees_temp),
+                    "pannes_detectees": len(pannes_detectees_temp),
                     "validation": resultat["multi_label_validation"]
                 })
         except Exception as e:
             print(f"Erreur Multi-label: {str(e)}")
-            # En cas d'erreur, on garde toutes les pannes détectées
 
         # Résultat final
         pannes_detectees_temp.sort(key=lambda x: x["score"], reverse=True)
