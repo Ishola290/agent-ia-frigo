@@ -5,6 +5,7 @@ import pickle
 import os
 import pandas as pd
 import json
+import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
@@ -75,6 +76,24 @@ for directory in [model_dir, dataset_dir, log_dir]:
         print(f"Note: Dossier {directory} - {str(e)}")
         pass
 
+        # Modèles temporels globaux
+    temporal_clf = None
+    temporal_anomaly = None
+    temporal_encoder = None
+    temporal_features = None
+    
+    try:
+        temporal_clf = joblib.load(os.path.join(model_dir, "temporal_fault_model.joblib"))
+        temporal_anomaly = joblib.load(os.path.join(model_dir, "temporal_anomaly_model.joblib"))
+        temporal_encoder = joblib.load(os.path.join(model_dir, "temporal_label_encoder.joblib"))
+    
+        with open(os.path.join(model_dir, "temporal_feature_columns.json"), "r", encoding="utf-8") as f:
+            temporal_features = json.load(f)
+    
+        print("✅ Modèles temporels chargés avec succès")
+    except Exception as e:
+        print(f"⚠️ Erreur chargement modèles temporels: {e}")
+
 def load_model(model_path):
     """Charge un modèle quel que soit son format (.pkl, .joblib, etc.)"""
     if not os.path.exists(model_path):
@@ -108,6 +127,61 @@ def log_action(action, details):
             f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
     except Exception as e:
         print(f"Erreur lors du logging: {str(e)}")
+
+def extract_temporal_features(sequence_df):
+    """
+    Extrait les mêmes features temporelles que celles utilisées pendant l'entraînement.
+    """
+    if temporal_features is None:
+        raise Exception("temporal_feature_columns.json non chargé")
+
+    features = {}
+    sensors = [
+        "Température",
+        "Pression_BP",
+        "Pression_HP",
+        "Courant",
+        "Tension",
+        "Humidité",
+        "Débit_air",
+        "Vibration"
+    ]
+
+    for sensor in sensors:
+        if sensor not in sequence_df.columns:
+            raise Exception(f"Colonne manquante dans la séquence: {sensor}")
+
+        values = sequence_df[sensor].astype(float).values
+
+        features[f"{sensor}_last"] = float(values[-1])
+        features[f"{sensor}_mean"] = float(np.mean(values))
+        features[f"{sensor}_std"] = float(np.std(values))
+        features[f"{sensor}_min"] = float(np.min(values))
+        features[f"{sensor}_max"] = float(np.max(values))
+        features[f"{sensor}_delta"] = float(values[-1] - values[0])
+
+        x = np.arange(len(values))
+        if len(values) >= 2:
+            features[f"{sensor}_slope"] = float(np.polyfit(x, values, 1)[0])
+        else:
+            features[f"{sensor}_slope"] = 0.0
+
+        features[f"{sensor}_range"] = float(np.max(values) - np.min(values))
+
+    if "time_minutes" in sequence_df.columns:
+        features["window_duration_min"] = float(
+            sequence_df["time_minutes"].iloc[-1] - sequence_df["time_minutes"].iloc[0]
+        )
+    else:
+        features["window_duration_min"] = float(len(sequence_df))
+
+    if "time_index" in sequence_df.columns:
+        features["time_index_last"] = float(sequence_df["time_index"].iloc[-1])
+    else:
+        features["time_index_last"] = float(len(sequence_df) - 1)
+
+    X = [features.get(col, 0.0) for col in temporal_features]
+    return [X]
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -443,7 +517,80 @@ def predict_advanced():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }), 500
+@app.route('/predict_temporal', methods=['POST'])
+def predict_temporal():
+    """
+    Prédiction temporelle basée sur une séquence de mesures.
+    Reçoit:
+    {
+      "sequence": [
+        {
+          "Température": -18,
+          "Pression_BP": 2.5,
+          ...
+        }
+      ]
+    }
+    """
+    try:
+        if temporal_clf is None or temporal_anomaly is None or temporal_encoder is None or temporal_features is None:
+            return jsonify({
+                "success": False,
+                "error": "Modèles temporels non chargés"
+            }), 503
 
+        data = request.get_json(force=True)
+        sequence = data.get("sequence", [])
+
+        if not isinstance(sequence, list):
+            return jsonify({
+                "success": False,
+                "error": "Le champ sequence doit être une liste"
+            }), 400
+
+        if len(sequence) < 10:
+            return jsonify({
+                "success": False,
+                "error": "Séquence trop courte (minimum 10 points requis)"
+            }), 400
+
+        df = pd.DataFrame(sequence)
+        X = extract_temporal_features(df)
+
+        pred_idx = int(temporal_clf.predict(X)[0])
+        fault_type = temporal_encoder.classes_[pred_idx]
+
+        if hasattr(temporal_clf, "predict_proba"):
+            probs = temporal_clf.predict_proba(X)[0]
+            confidence = float(probs[pred_idx] * 100)
+        else:
+            confidence = 100.0
+
+        anomaly_pred = int(temporal_anomaly.predict(X)[0])
+        anomaly_score = float(temporal_anomaly.score_samples(X)[0])
+        is_temporal_anomaly = anomaly_pred == -1
+
+        result = {
+            "success": True,
+            "temporal_fault": str(fault_type),
+            "confidence": round(confidence, 2),
+            "is_temporal_anomaly": is_temporal_anomaly,
+            "temporal_anomaly_score": round(anomaly_score, 4),
+            "window_size": len(sequence),
+            "timestamp": datetime.now().isoformat()
+        }
+
+        log_action("temporal_prediction", result)
+
+        return jsonify(result)
+
+    except Exception as e:
+        log_action("erreur_predict_temporal", {"error": str(e)})
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 @app.route('/retrain', methods=['POST'])
 def retrain():
     """Réentraîne tous les modèles avec le dataset mis à jour"""
