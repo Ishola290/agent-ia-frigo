@@ -68,32 +68,49 @@ for directory in [model_dir, dataset_dir, log_dir]:
         if not os.path.exists(directory):
             os.makedirs(directory, mode=0o755)
         elif not os.path.isdir(directory):
-            # Si c'est un fichier au lieu d'un dossier, le supprimer
             os.remove(directory)
             os.makedirs(directory, mode=0o755)
     except (FileExistsError, PermissionError, OSError) as e:
-        # Si le dossier existe déjà ou erreur de permission, continuer
         print(f"Note: Dossier {directory} - {str(e)}")
         pass
 
-        # Modèles temporels globaux
-    temporal_clf = None
-    temporal_anomaly = None
-    temporal_encoder = None
-    temporal_features = None
-    
-    try:
-        temporal_clf = joblib.load(os.path.join(model_dir, "temporal_fault_model.joblib"))
-        temporal_anomaly = joblib.load(os.path.join(model_dir, "temporal_anomaly_model.joblib"))
-        temporal_encoder = joblib.load(os.path.join(model_dir, "temporal_label_encoder.joblib"))
-    
-        with open(os.path.join(model_dir, "temporal_feature_columns.json"), "r", encoding="utf-8") as f:
-            temporal_features = json.load(f)
-    
-        print("✅ Modèles temporels chargés avec succès")
-    except Exception as e:
-        print(f"⚠️ Erreur chargement modèles temporels: {e}")
+# ============================
+# MODÈLES TEMPORELS COMPACTS
+# ============================
 
+temporal_clf = None
+temporal_anomaly = None
+temporal_encoder = None
+temporal_features = None
+temporal_rul_model = None
+temporal_health_model = None
+temporal_manifest = None
+
+try:
+    temporal_clf = joblib.load(os.path.join(model_dir, "temporal_fault_model.joblib"))
+    temporal_anomaly = joblib.load(os.path.join(model_dir, "temporal_anomaly_model.joblib"))
+    temporal_encoder = joblib.load(os.path.join(model_dir, "temporal_label_encoder.joblib"))
+    temporal_rul_model = joblib.load(os.path.join(model_dir, "temporal_rul_model.joblib"))
+    temporal_health_model = joblib.load(os.path.join(model_dir, "temporal_health_model.joblib"))
+
+    with open(os.path.join(model_dir, "temporal_feature_columns.json"), "r", encoding="utf-8") as f:
+        temporal_features = json.load(f)
+
+    manifest_path = os.path.join(model_dir, "temporal_model_manifest.json")
+    if os.path.exists(manifest_path):
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            temporal_manifest = json.load(f)
+
+    print("✅ Modèles temporels compacts chargés avec succès")
+    print(f"   - temporal_fault_model.joblib: OK")
+    print(f"   - temporal_anomaly_model.joblib: OK")
+    print(f"   - temporal_rul_model.joblib: OK")
+    print(f"   - temporal_health_model.joblib: OK")
+    print(f"   - temporal_feature_columns.json: {len(temporal_features)} features")
+
+except Exception as e:
+    print(f"⚠️ Erreur chargement modèles temporels compacts: {e}")
+    
 def load_model(model_path):
     """Charge un modèle quel que soit son format (.pkl, .joblib, etc.)"""
     if not os.path.exists(model_path):
@@ -128,14 +145,51 @@ def log_action(action, details):
     except Exception as e:
         print(f"Erreur lors du logging: {str(e)}")
 
+def temporal_slope(values):
+    """Calcule la pente d'une série temporelle."""
+    values = np.asarray(values, dtype=float)
+    if len(values) < 2:
+        return 0.0
+    x = np.arange(len(values), dtype=float)
+    return float(np.polyfit(x, values, 1)[0])
+
+
+def temporal_acceleration(values):
+    """Calcule l'accélération, c'est-à-dire la dérivée seconde."""
+    values = np.asarray(values, dtype=float)
+    if len(values) < 3:
+        return 0.0
+    x = np.arange(len(values), dtype=float)
+    coefs = np.polyfit(x, values, 2)
+    return float(2 * coefs[0])
+
+
+def temporal_autocorr(values, lag=1):
+    """Calcule l'autocorrélation d'une série."""
+    values = np.asarray(values, dtype=float)
+    if len(values) <= lag + 1:
+        return 0.0
+
+    var = values.var()
+    if var == 0:
+        return 0.0
+
+    centered = values - values.mean()
+    return float(np.mean(centered[:-lag] * centered[lag:]) / var)
+
+
 def extract_temporal_features(sequence_df):
     """
-    Extrait les mêmes features temporelles que celles utilisées pendant l'entraînement.
+    Extrait les features temporelles multi-échelles utilisées par les modèles compacts :
+    - short : 15 derniers points
+    - medium : 60 derniers points
+    - long : toute la fenêtre
     """
     if temporal_features is None:
         raise Exception("temporal_feature_columns.json non chargé")
 
     features = {}
+
     sensors = [
         "Température",
         "Pression_BP",
@@ -147,38 +201,49 @@ def extract_temporal_features(sequence_df):
         "Vibration"
     ]
 
+    n = len(sequence_df)
+
     for sensor in sensors:
         if sensor not in sequence_df.columns:
             raise Exception(f"Colonne manquante dans la séquence: {sensor}")
 
-        values = sequence_df[sensor].astype(float).values
+        full = sequence_df[sensor].astype(float).values
 
-        features[f"{sensor}_last"] = float(values[-1])
-        features[f"{sensor}_mean"] = float(np.mean(values))
-        features[f"{sensor}_std"] = float(np.std(values))
-        features[f"{sensor}_min"] = float(np.min(values))
-        features[f"{sensor}_max"] = float(np.max(values))
-        features[f"{sensor}_delta"] = float(values[-1] - values[0])
+        features[f"{sensor}_last"] = float(full[-1])
 
-        x = np.arange(len(values))
-        if len(values) >= 2:
-            features[f"{sensor}_slope"] = float(np.polyfit(x, values, 1)[0])
-        else:
-            features[f"{sensor}_slope"] = 0.0
+        scales = {
+            "short": min(15, n),
+            "medium": min(60, n),
+            "long": n
+        }
 
-        features[f"{sensor}_range"] = float(np.max(values) - np.min(values))
+        for scale_name, scale_size in scales.items():
+            values = full[-scale_size:]
+
+            features[f"{sensor}_{scale_name}_mean"] = float(np.mean(values))
+            features[f"{sensor}_{scale_name}_std"] = float(np.std(values))
+            features[f"{sensor}_{scale_name}_min"] = float(np.min(values))
+            features[f"{sensor}_{scale_name}_max"] = float(np.max(values))
+            features[f"{sensor}_{scale_name}_slope"] = temporal_slope(values)
+
+        features[f"{sensor}_delta_total"] = float(full[-1] - full[0])
+        features[f"{sensor}_range_total"] = float(np.max(full) - np.min(full))
+        features[f"{sensor}_acceleration"] = temporal_acceleration(full)
+        features[f"{sensor}_autocorr_lag1"] = temporal_autocorr(full, lag=1)
+        features[f"{sensor}_autocorr_lag5"] = temporal_autocorr(full, lag=5)
+        features[f"{sensor}_short_vs_long_diff"] = float(np.mean(full[-scales["short"]:]) - np.mean(full))
 
     if "time_minutes" in sequence_df.columns:
         features["window_duration_min"] = float(
             sequence_df["time_minutes"].iloc[-1] - sequence_df["time_minutes"].iloc[0]
         )
     else:
-        features["window_duration_min"] = float(len(sequence_df))
+        features["window_duration_min"] = float(n)
 
     if "time_index" in sequence_df.columns:
         features["time_index_last"] = float(sequence_df["time_index"].iloc[-1])
     else:
-        features["time_index_last"] = float(len(sequence_df) - 1)
+        features["time_index_last"] = float(n - 1)
 
     X = [features.get(col, 0.0) for col in temporal_features]
     return [X]
@@ -517,26 +582,36 @@ def predict_advanced():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }), 500
+        
 @app.route('/predict_temporal', methods=['POST'])
 def predict_temporal():
     """
-    Prédiction temporelle basée sur une séquence de mesures.
-    Reçoit:
-    {
-      "sequence": [
-        {
-          "Température": -18,
-          "Pression_BP": 2.5,
-          ...
-        }
-      ]
-    }
+    Prédiction temporelle compacte :
+    - temporal_fault_model.joblib      -> panne temporelle principale
+    - temporal_anomaly_model.joblib    -> anomalie temporelle
+    - temporal_rul_model.joblib        -> jours restants avant panne
+    - temporal_health_model.joblib     -> score santé 0-100
     """
     try:
-        if temporal_clf is None or temporal_anomaly is None or temporal_encoder is None or temporal_features is None:
+        missing_models = []
+        if temporal_clf is None:
+            missing_models.append("temporal_fault_model.joblib")
+        if temporal_anomaly is None:
+            missing_models.append("temporal_anomaly_model.joblib")
+        if temporal_encoder is None:
+            missing_models.append("temporal_label_encoder.joblib")
+        if temporal_features is None:
+            missing_models.append("temporal_feature_columns.json")
+        if temporal_rul_model is None:
+            missing_models.append("temporal_rul_model.joblib")
+        if temporal_health_model is None:
+            missing_models.append("temporal_health_model.joblib")
+
+        if missing_models:
             return jsonify({
                 "success": False,
-                "error": "Modèles temporels non chargés"
+                "error": "Modèles temporels non chargés",
+                "missing_models": missing_models
             }), 503
 
         data = request.get_json(force=True)
@@ -548,15 +623,24 @@ def predict_temporal():
                 "error": "Le champ sequence doit être une liste"
             }), 400
 
-        if len(sequence) < 10:
+        min_points = 10
+        if temporal_manifest and "window" in temporal_manifest:
+            # Le modèle a été entraîné avec une fenêtre donnée.
+            # On ne bloque pas si la séquence est plus courte, mais on recommande la taille.
+            recommended_window = int(temporal_manifest["window"])
+        else:
+            recommended_window = 120
+
+        if len(sequence) < min_points:
             return jsonify({
                 "success": False,
-                "error": "Séquence trop courte (minimum 10 points requis)"
+                "error": f"Séquence trop courte (minimum {min_points} points requis)"
             }), 400
 
         df = pd.DataFrame(sequence)
         X = extract_temporal_features(df)
 
+        # 1. Panne temporelle probable
         pred_idx = int(temporal_clf.predict(X)[0])
         fault_type = temporal_encoder.classes_[pred_idx]
 
@@ -566,9 +650,26 @@ def predict_temporal():
         else:
             confidence = 100.0
 
+        # 2. Anomalie temporelle
         anomaly_pred = int(temporal_anomaly.predict(X)[0])
         anomaly_score = float(temporal_anomaly.score_samples(X)[0])
         is_temporal_anomaly = anomaly_pred == -1
+
+        # 3. RUL
+        rul_days = float(temporal_rul_model.predict(X)[0])
+        rul_days = max(0.0, rul_days)
+
+        # 4. Health score
+        health_score = float(temporal_health_model.predict(X)[0])
+        health_score = max(0.0, min(100.0, health_score))
+
+        # 5. Niveau de risque métier
+        if health_score < 25 or rul_days < 7 or is_temporal_anomaly:
+            risk_level = "critical"
+        elif health_score < 50 or rul_days < 21:
+            risk_level = "warning"
+        else:
+            risk_level = "normal"
 
         result = {
             "success": True,
@@ -576,7 +677,11 @@ def predict_temporal():
             "confidence": round(confidence, 2),
             "is_temporal_anomaly": is_temporal_anomaly,
             "temporal_anomaly_score": round(anomaly_score, 4),
+            "rul_days": round(rul_days, 2),
+            "health_score": round(health_score, 2),
+            "risk_level": risk_level,
             "window_size": len(sequence),
+            "recommended_window": recommended_window,
             "timestamp": datetime.now().isoformat()
         }
 
@@ -845,14 +950,23 @@ def status():
         models_count = len(model_files)
         
         return jsonify({
-            "status": "online",
-            "models_loaded": models_count,
-            "known_faults": len(pannes),
-            "fault_types": list(pannes.keys()),
-            "model_files": model_files,
-            "model_directory": model_dir,
-            "timestamp": datetime.now().isoformat()
-        })
+    "status": "online",
+    "models_loaded": models_count,
+    "known_faults": len(pannes),
+    "fault_types": list(pannes.keys()),
+    "model_files": model_files,
+    "model_directory": model_dir,
+    "temporal_models": {
+        "temporal_fault_model": os.path.exists(os.path.join(model_dir, "temporal_fault_model.joblib")),
+        "temporal_anomaly_model": os.path.exists(os.path.join(model_dir, "temporal_anomaly_model.joblib")),
+        "temporal_label_encoder": os.path.exists(os.path.join(model_dir, "temporal_label_encoder.joblib")),
+        "temporal_feature_columns": os.path.exists(os.path.join(model_dir, "temporal_feature_columns.json")),
+        "temporal_rul_model": os.path.exists(os.path.join(model_dir, "temporal_rul_model.joblib")),
+        "temporal_health_model": os.path.exists(os.path.join(model_dir, "temporal_health_model.joblib")),
+        "temporal_model_manifest": os.path.exists(os.path.join(model_dir, "temporal_model_manifest.json"))
+    },
+    "timestamp": datetime.now().isoformat()
+})
     except Exception as e:
         return jsonify({
             "status": "error",
@@ -895,11 +1009,32 @@ def metrics():
             if not model_found:
                 metrics_data["models"][panne] = {"exists": False}
         
+        # ============================================================
+        # BLOC À INSÉRER ICI (même indentation que le for panne)
+        # ============================================================
+        temporal_files = [
+            "temporal_fault_model.joblib",
+            "temporal_anomaly_model.joblib",
+            "temporal_label_encoder.joblib",
+            "temporal_rul_model.joblib",
+            "temporal_health_model.joblib"
+        ]
+
+        metrics_data["temporal_models"] = {}
+
+        for filename in temporal_files:
+            path = os.path.join(model_dir, filename)
+            metrics_data["temporal_models"][filename] = {
+                "exists": os.path.exists(path),
+                "size_kb": round(os.path.getsize(path) / 1024, 2) if os.path.exists(path) else 0,
+                "last_modified": datetime.fromtimestamp(os.path.getmtime(path)).isoformat() if os.path.exists(path) else None
+            }
+        # ============================================================
+        
         return jsonify(metrics_data)
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 @app.route('/health', methods=['GET'])
 def health():
     """Endpoint de health check"""
