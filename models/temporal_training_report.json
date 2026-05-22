@@ -1,9 +1,8 @@
 {
-  "window_size": 30,
-  "stride": 5,
-  "rows_raw": 1560000,
-  "windows": 247000,
-  "features": 66,
+  "version": "compact_temporal_rul_v1",
+  "window": 180,
+  "stride": 10,
+  "features": 178,
   "classes": [
     "capteur_defectueux",
     "défaillance_compresseur",
@@ -19,295 +18,107 @@
     "pression_anormale_HP",
     "surchauffe_compresseur"
   ],
-  "accuracy": 82.17,
+  "accuracy": 93.94,
+  "rul_mae_days": 45.77,
+  "health_mae_percent": 4.92,
+  "model_sizes_mb": {
+    "temporal_fault_model.joblib": 4.101,
+    "temporal_anomaly_model.joblib": 0.403,
+    "temporal_label_encoder.joblib": 0.0,
+    "temporal_rul_model.joblib": 0.613,
+    "temporal_health_model.joblib": 0.622
+  },
   "classification_report": {
     "capteur_defectueux": {
-      "precision": 1.0,
-      "recall": 0.9889320969189351,
-      "f1-score": 0.9944352534215671,
-      "support": 3343.0
+      "precision": 0.9974554707379135,
+      "recall": 0.9514563106796117,
+      "f1-score": 0.9739130434782609,
+      "support": 412.0
     },
     "défaillance_compresseur": {
-      "precision": 0.9927588703837799,
-      "recall": 0.8131672597864769,
-      "f1-score": 0.8940332572546462,
-      "support": 3372.0
+      "precision": 0.997229916897507,
+      "recall": 0.9230769230769231,
+      "f1-score": 0.9587217043941412,
+      "support": 390.0
     },
     "défaillance_thermostat": {
-      "precision": 0.8883065836881756,
-      "recall": 0.8095522388059702,
-      "f1-score": 0.8471029205060128,
-      "support": 3350.0
+      "precision": 0.9923076923076923,
+      "recall": 0.9170616113744076,
+      "f1-score": 0.9532019704433498,
+      "support": 422.0
     },
     "défaillance_ventilateur": {
-      "precision": 0.941047235444892,
-      "recall": 0.7621589561091341,
-      "f1-score": 0.8422087497951827,
-      "support": 3372.0
+      "precision": 0.9921259842519685,
+      "recall": 0.9242053789731052,
+      "f1-score": 0.9569620253164557,
+      "support": 409.0
     },
     "défaut_dégivrage": {
-      "precision": 0.8407943453382699,
-      "recall": 0.7441167709264224,
-      "f1-score": 0.7895069532237674,
-      "support": 3357.0
+      "precision": 0.9924812030075187,
+      "recall": 0.9295774647887324,
+      "f1-score": 0.96,
+      "support": 426.0
     },
     "fuite_fluide": {
-      "precision": 0.9720670391061452,
-      "recall": 0.7239227340267459,
-      "f1-score": 0.8298415942769545,
-      "support": 3365.0
+      "precision": 0.9972826086956522,
+      "recall": 0.8886198547215496,
+      "f1-score": 0.939820742637644,
+      "support": 413.0
     },
     "givrage_evaporateur": {
-      "precision": 0.8826879271070615,
-      "recall": 0.6969424460431655,
-      "f1-score": 0.7788944723618091,
-      "support": 3336.0
+      "precision": 0.9876847290640394,
+      "recall": 0.9218390804597701,
+      "f1-score": 0.9536266349583828,
+      "support": 435.0
     },
     "normal": {
-      "precision": 0.5564012977289743,
-      "recall": 0.9806465801627446,
-      "f1-score": 0.709975320436271,
-      "support": 9094.0
+      "precision": 0.757532281205165,
+      "recall": 0.9915492957746479,
+      "f1-score": 0.8588857259048394,
+      "support": 1065.0
     },
     "obstruction_conduit": {
-      "precision": 0.96328125,
-      "recall": 0.7317507418397626,
-      "f1-score": 0.8317032040472175,
-      "support": 3370.0
+      "precision": 0.9903147699757869,
+      "recall": 0.9402298850574713,
+      "f1-score": 0.964622641509434,
+      "support": 435.0
     },
     "panne_electrique": {
-      "precision": 0.9946504992867332,
-      "recall": 0.830553901131626,
-      "f1-score": 0.9052255761116521,
-      "support": 3358.0
+      "precision": 0.9875311720698254,
+      "recall": 0.9339622641509434,
+      "f1-score": 0.96,
+      "support": 424.0
     },
     "pression_anormale_BP": {
-      "precision": 0.9574629699962021,
-      "recall": 0.752762018512989,
-      "f1-score": 0.8428619190906051,
-      "support": 3349.0
+      "precision": 1.0,
+      "recall": 0.9360189573459715,
+      "f1-score": 0.966952264381885,
+      "support": 422.0
     },
     "pression_anormale_HP": {
-      "precision": 0.9805097451274363,
-      "recall": 0.7811286951328755,
-      "f1-score": 0.8695363137776301,
-      "support": 3349.0
+      "precision": 0.9923273657289002,
+      "recall": 0.9349397590361446,
+      "f1-score": 0.9627791563275434,
+      "support": 415.0
     },
     "surchauffe_compresseur": {
-      "precision": 0.9821428571428571,
-      "recall": 0.7961595273264401,
-      "f1-score": 0.8794256811877957,
-      "support": 3385.0
+      "precision": 0.9926650366748166,
+      "recall": 0.9376443418013857,
+      "f1-score": 0.9643705463182898,
+      "support": 433.0
     },
-    "accuracy": 0.8217408906882591,
+    "accuracy": 0.939354204228815,
     "macro avg": {
-      "precision": 0.9193931246423482,
-      "recall": 0.8009072282094838,
-      "f1-score": 0.8472885550377778,
-      "support": 49400.0
+      "precision": 0.9751490946628298,
+      "recall": 0.9330908559415896,
+      "f1-score": 0.9518351119746329,
+      "support": 6101.0
     },
     "weighted avg": {
-      "precision": 0.8773046995538735,
-      "recall": 0.8217408906882591,
-      "f1-score": 0.831351500184909,
-      "support": 49400.0
+      "precision": 0.9520790200459888,
+      "recall": 0.939354204228815,
+      "f1-score": 0.9420225685249449,
+      "support": 6101.0
     }
-  },
-  "confusion_matrix": [
-    [
-      3306,
-      0,
-      0,
-      1,
-      1,
-      0,
-      0,
-      33,
-      0,
-      1,
-      1,
-      0,
-      0
-    ],
-    [
-      0,
-      2742,
-      0,
-      3,
-      3,
-      4,
-      0,
-      597,
-      3,
-      2,
-      2,
-      3,
-      13
-    ],
-    [
-      0,
-      2,
-      2712,
-      5,
-      1,
-      12,
-      0,
-      583,
-      0,
-      0,
-      4,
-      2,
-      29
-    ],
-    [
-      0,
-      0,
-      10,
-      2570,
-      3,
-      4,
-      0,
-      730,
-      48,
-      0,
-      4,
-      2,
-      1
-    ],
-    [
-      0,
-      0,
-      0,
-      5,
-      2498,
-      1,
-      275,
-      552,
-      2,
-      0,
-      21,
-      3,
-      0
-    ],
-    [
-      0,
-      3,
-      92,
-      9,
-      2,
-      2436,
-      0,
-      798,
-      14,
-      2,
-      6,
-      0,
-      3
-    ],
-    [
-      0,
-      0,
-      0,
-      16,
-      342,
-      0,
-      2325,
-      625,
-      7,
-      1,
-      17,
-      3,
-      0
-    ],
-    [
-      0,
-      7,
-      10,
-      23,
-      37,
-      6,
-      16,
-      8918,
-      10,
-      5,
-      29,
-      31,
-      2
-    ],
-    [
-      0,
-      0,
-      5,
-      85,
-      4,
-      31,
-      2,
-      755,
-      2466,
-      1,
-      18,
-      2,
-      1
-    ],
-    [
-      0,
-      1,
-      0,
-      1,
-      4,
-      0,
-      2,
-      555,
-      1,
-      2789,
-      4,
-      1,
-      0
-    ],
-    [
-      0,
-      0,
-      0,
-      2,
-      66,
-      2,
-      10,
-      740,
-      5,
-      2,
-      2521,
-      1,
-      0
-    ],
-    [
-      0,
-      0,
-      0,
-      6,
-      10,
-      1,
-      3,
-      703,
-      3,
-      1,
-      6,
-      2616,
-      0
-    ],
-    [
-      0,
-      7,
-      224,
-      5,
-      0,
-      9,
-      1,
-      439,
-      1,
-      0,
-      0,
-      4,
-      2695
-    ]
-  ]
+  }
 }
